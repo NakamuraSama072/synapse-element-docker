@@ -60,6 +60,7 @@ generate_synapse_config() {
 change_directory() {
   # TODO: add support for relative paths
   local path="$1"
+  log "Changing directory to ${path}..."
 
   # if path does not exist
   if [[ ! -d "${path}" ]]; then
@@ -126,10 +127,10 @@ enable_registration() {
   enable_registration_without_verification: true' "$1/homeserver.yaml"
 }
 
-# Change the port that synapse will run on in homeserver.yaml
-change_running_port() {
-  sed -i "s/port: 8008/port: $1/g" "$2/homeserver.yaml"
-}
+# # Change the port that synapse will run on in homeserver.yaml
+# change_running_port() {
+#   sed -i "s/port: 8008/port: $1/g" "$2/homeserver.yaml"
+# }
 
 # Get the port that element-web will run on
 get_element_web_port() {
@@ -158,12 +159,12 @@ services:
     container_name: "synapse"
     restart: unless-stopped
     ports:
-      - "$2:$2"
+      - "$2:8008"
     volumes:
       - "$1:/data"
     environment:
       VIRTUAL_HOST: "$3"
-      VIRTUAL_PORT: "$2"
+      VIRTUAL_PORT: "8008"
       LETSENCRYPT_HOST: "$3"
       SYNAPSE_SERVER_NAME: "$3"
       SYNAPSE_REPORT_STATS: "yes"
@@ -177,6 +178,10 @@ EOF
 
 # The main function.
 main() {
+  log "Welcome to the setup script for synapse and element-web docker containers!"
+  log "This script will guide you through the setup process and generate necessary configuration files for synapse and element-web. Please follow the instructions and provide the required information when prompted."
+  log "Please note that this script may not stop in a few cases when you provide invalid input. Please exit the script manually and run it again with correct input if you encounter such issue."
+  log "I will try to fix this in the future updates. Thank you for your understanding."
   log "Verifying that you are root..."
   check_root_permission
   verify_docker_installation
@@ -191,7 +196,7 @@ main() {
   # Additional configuration for synapse
   running_port="$(get_running_port)"
   enable_registration "${synapse_destination}"
-  change_running_port "${running_port}" "${synapse_destination}"
+  # change_running_port "${running_port}" "${synapse_destination}"
   element_web_port="$(get_element_web_port)"
 
   # Generate docker-compose.yaml file for synapse and element-web
