@@ -110,7 +110,7 @@ get_server_name() {
 get_running_port() {
   local port
   read -r -p "Please enter the port that synapse will run on (default: 8008): " port
-  
+
   # TODO: Validate input
   # No input, use default port instead
   if [[ -z "${port}" ]]; then
@@ -123,8 +123,8 @@ get_running_port() {
 # Add enable_registration configuration to homeserver.yaml
 enable_registration() {
   sed -i '/# vim:ft=yaml/i \
-  enable_registration: true \
-  enable_registration_without_verification: true' "$1/homeserver.yaml"
+enable_registration: true\
+enable_registration_without_verification: true' "$1/homeserver.yaml"
 }
 
 # # Change the port that synapse will run on in homeserver.yaml
@@ -136,7 +136,7 @@ enable_registration() {
 get_element_web_port() {
   local port
   read -r -p "Please enter the port that element-web will run on (default: 8009): " port
-  
+
   # TODO: Validate input
   # No input, use default port instead
   if [[ -z "${port}" ]]; then
@@ -172,6 +172,7 @@ services:
     ports:
       - "$4:80"
     image: vectorim/element-web
+    container_name: "element-web"
     restart: unless-stopped
 EOF
 }
@@ -186,7 +187,7 @@ main() {
   check_root_permission
   verify_docker_installation
   # verify_firewall_installation
-  
+
   # Generate configuration file for synapse
   synapse_destination="$(get_synapse_installation_path)"
   server_name="$(get_server_name)"
