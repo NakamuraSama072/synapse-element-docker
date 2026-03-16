@@ -7,7 +7,7 @@ log() {
   echo "[INFO] $1"
 }
 
-note() {
+hint() {
   echo -e "\033[36m[NOTE] $1\033[0m"
 }
 
@@ -35,7 +35,7 @@ verify_docker_installation() {
     log "Docker is installed."
   else
     log "Unable to find existing installation of docker."
-    note "To install docker, please read https://docs.docker.com/engine/install for more information."
+    hint "To install docker, please read https://docs.docker.com/engine/install for more information."
     fail "Docker not found on this host. Please install it first."
   fi
 }
@@ -62,49 +62,118 @@ change_directory() {
   local path="$1"
 
   # if path does not exist
-  if [[ -d "$(path)" ]]; then
-    warning "$(path) does not exist. Creating..."
-    mkdir -p "$(path)"
+  if [[ ! -d "${path}" ]]; then
+    warning "${path} does not exist. Creating..."
+    mkdir -p "${path}"
   fi
 
-  cd "$(path)"
+  cd "${path}" || fail "Failed to change directory to ${path}. Please check if the path is correct and you have permission to access it."
 }
 
 # get installation path of synapse
 get_synapse_installation_path() {
   local destination
-  note "Synapse will be installed to /opt/matrix/synapse_data by default."
+  hint "Synapse will be installed to /opt/matrix/synapse_data by default." >&2
   read -r -p "Please enter the path you wish to install synapse (optional): " destination
 
   # TODO: Validate input
   # No input, use default installation path instead
-  if [[ -z "$(destination)" ]]; then
+  if [[ -z "${destination}" ]]; then
     destination="/opt/matrix/synapse_data"
   fi
 
-  echo "$(destination)"
+  echo "$destination"
 }
 
 # get name of synapse server
 get_server_name() {
   local server_name
-  note "You must specify a name for your server. It should be FQDN (Fully Qualified Domain Name), e.g. synapse.testinst.net"
+  hint "You must specify a name for your server. It should be FQDN (Fully Qualified Domain Name), e.g. synapse.testinst.net" >&2
+  hint "Please note that you cannot change your server name after generating the configuration file. If you want to change it, you will have to regenerate the configuration file." >&2
   read -r -p "Please enter the name of your server: " server_name
 
   # Empty name
-  if [[ -z "$(server_name)" ]]; then
+  if [[ -z "${server_name}" ]]; then
     fail "No server name specified. Please run the script again for setup."
   fi
 
   # Invalid server name
-  if ! [[ "${server_name}" =~ ^[a-z_][a-z0-9-]{0,31}$ ]]; then
-		fail "Invalid server name '${server_name}'. Use lowercase letters (a-z), numbers (0-9) or hyphen (-)."
+  if ! [[ "${server_name}" =~ ^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$ ]]; then
+		fail "Invalid server name '${server_name}'. Use lowercase letters (a-z), numbers (0-9), hyphen (-) or dot (.)."
 	fi
 
-  echo "$(server_name)"
+  echo "${server_name}"
 }
 
-# default_path: /opt/matrix/synapse_data
+# get the port that synapse will run on
+get_running_port() {
+  local port
+  read -r -p "Please enter the port that synapse will run on (default: 8008): " port
+  
+  # TODO: Validate input
+  # No input, use default port instead
+  if [[ -z "${port}" ]]; then
+    port=8008
+  fi
+
+  echo "${port}"
+}
+
+# Add enable_registration configuration to homeserver.yaml
+enable_registration() {
+  sed -i '/# vim:ft=yaml/i \
+  enable_registration: true \
+  enable_registration_without_verification: true' "$1/homeserver.yaml"
+}
+
+# Change the port that synapse will run on in homeserver.yaml
+change_running_port() {
+  sed -i "s/port: 8008/port: $1/g" "$2/homeserver.yaml"
+}
+
+# Get the port that element-web will run on
+get_element_web_port() {
+  local port
+  read -r -p "Please enter the port that element-web will run on (default: 8009): " port
+  
+  # TODO: Validate input
+  # No input, use default port instead
+  if [[ -z "${port}" ]]; then
+    port=8009
+  fi
+
+  echo "${port}"
+}
+
+# Generate docker-compose.yaml file for synapse, using the port, server name and path specified by user
+generate_docker_compose() {
+  cat <<EOF > "$1/docker-compose.yaml"
+# version: "3.3"
+# Please refer to: https://blog.laoda.de/archives/docker-compose-install-matrix-element
+# Reminder: You might need a translator for reading this site.
+
+services:
+  synapse:
+    image: "matrixdotorg/synapse:latest"
+    container_name: "synapse"
+    restart: unless-stopped
+    ports:
+      - "$2:$2"
+    volumes:
+      - "$1:/data"
+    environment:
+      VIRTUAL_HOST: "$3"
+      VIRTUAL_PORT: "$2"
+      LETSENCRYPT_HOST: "$3"
+      SYNAPSE_SERVER_NAME: "$3"
+      SYNAPSE_REPORT_STATS: "yes"
+  element-web:
+    ports:
+      - "$4:80"
+    image: vectorim/element-web
+    restart: unless-stopped
+EOF
+}
 
 # The main function.
 main() {
@@ -113,11 +182,24 @@ main() {
   verify_docker_installation
   # verify_firewall_installation
   
+  # Generate configuration file for synapse
   synapse_destination="$(get_synapse_installation_path)"
   server_name="$(get_server_name)"
-  change_directory "$(synapse_destination)"
-  generate_synapse_config "$(synapse_destination)" "$(server_name)"
-  
+  change_directory "${synapse_destination}"
+  generate_synapse_config "${synapse_destination}" "${server_name}"
+
+  # Additional configuration for synapse
+  running_port="$(get_running_port)"
+  enable_registration "${synapse_destination}"
+  change_running_port "${running_port}" "${synapse_destination}"
+  element_web_port="$(get_element_web_port)"
+
+  # Generate docker-compose.yaml file for synapse and element-web
+  log "Generating docker-compose.yaml file for synapse and element-web..."
+  generate_docker_compose "${synapse_destination}" "${running_port}" "${server_name}" "${element_web_port}"
+  log "Generation complete. Now attempting to start synapse and element-web using docker-compose..."
+  # Start synapse and element-web using docker-compose
+  docker compose up -d
 }
 
 # Executes from here
