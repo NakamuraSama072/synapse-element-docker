@@ -1,0 +1,28 @@
+# version: "3.3"
+# Please refer to: https://blog.laoda.de/archives/docker-compose-install-matrix-element
+# Reminder: You might need a translator for reading this site.
+
+services:
+  synapse:
+    image: "matrixdotorg/synapse:latest"
+    container_name: "synapse"
+    restart: unless-stopped
+    ports:
+      - "8008:8008"
+      # You can use other open ports on your host if 8008 is not available, e.g. "2435:8008".
+      # However, port 8448 is not recommended as it is reserved for federation and should be used for that purpose only.
+    volumes:
+      - "/opt/matrix/synapse-data:/data"
+    environment:
+      # You must replace "synapse.yourhost.domain" with your actual domain name.
+      VIRTUAL_HOST: "synapse.yourhost.domain"
+      VIRTUAL_PORT: "8008" # YOU SHOULD NOT MODIFY THIS
+      LETSENCRYPT_HOST: "synapse.yourhost.domain"
+      SYNAPSE_SERVER_NAME: "synapse.yourhost.domain"
+      SYNAPSE_REPORT_STATS: "yes"
+  element-web:
+    ports:
+      - "8009:80"
+    image: vectorim/element-web
+    container_name: "element-web"
+    restart: unless-stopped
