@@ -40,8 +40,17 @@ verify_docker_installation() {
 
 # verify firewall installation
 verify_firewall_installation() {
-  # TODO: verify ufw/firewall-cmd installation according to distrbution type
-  echo "Complete me"
+  log "Verifying firewall installation..."
+  if command -v ufw &> /dev/null; then
+    log "ufw detected (Debian/Ubuntu)."
+    FIREWALL_MANAGER="ufw"
+  elif command -v firewall-cmd &> /dev/null; then
+    log "firewall-cmd detected (RHEL/CentOS)."
+    FIREWALL_MANAGER="firewall-cmd"
+  else
+    warning "No supported firewall (ufw/firewall-cmd) found. Firewall rules will be skipped."
+    FIREWALL_MANAGER="none"
+  fi
 }
 
 # generate home-server configuration file
@@ -107,7 +116,7 @@ get_server_name() {
 # get the port that synapse will run on
 get_running_port() {
   local port
-  log "The script is now attempting to set up the running port for synapse." >&2
+  hint "The script is now attempting to set up the running port for synapse." >&2
   read -r -p "Please enter the port that synapse will run on (default: 8008): " port
 
   # No input, use default port instead
@@ -136,7 +145,7 @@ enable_registration_without_verification: true' "$1/homeserver.yaml"
 get_element_web_port() {
   local port
 
-  log "The script is now attempting to set up the running port for element-web." >&2
+  hint "The script is now attempting to set up the running port for element-web." >&2
   read -r -p "Please enter the port that element-web will run on (default: 8009): " port
 
   # No input, use default port instead
@@ -154,7 +163,7 @@ check_port_availability() {
   local port="$1"
   local service_name="$2"
 
-  log "Checking if port ${port} is available for ${service_name}..."
+  note "Checking if port ${port} is available for ${service_name}..."
 
   # Using ss
   if command -v ss &> /dev/null; then
@@ -169,6 +178,36 @@ check_port_availability() {
   else
     warning "Unable to verify whether port ${port} is in use (missing ss/netstat). Continuing without occupancy check."
   fi
+}
+
+# Open firewall ports for synapse and element-web
+open_firewall_ports() {
+  local synapse_port="$1"
+  local element_port="$2"
+
+  # firewall not found or unsupported (e.g. iptables), skip firewall configuration
+  if [[ "${FIREWALL_MANAGER}" == "none" ]]; then
+    warning "Skipping firewall rules: no or unsupported firewall found."
+    return
+  fi
+
+  log "Opening port ${synapse_port}/tcp and 8448/tcp for synapse..."
+  log "Opening port ${element_port}/tcp for element-web..."
+
+  # ufw
+  if [[ "${FIREWALL_MANAGER}" == "ufw" ]]; then
+    ufw allow "${synapse_port}/tcp" || fail "Failed to open port ${synapse_port} with ufw."
+    ufw allow 8448/tcp || fail "Failed to open port 8448 with ufw." # Federation port for synapse
+    ufw allow "${element_port}/tcp" || fail "Failed to open port ${element_port} with ufw."
+  # firewall-cmd
+  elif [[ "${FIREWALL_MANAGER}" == "firewall-cmd" ]]; then
+    firewall-cmd --permanent --add-port="${synapse_port}/tcp" || fail "Failed to open port ${synapse_port} with firewall-cmd."
+    firewall-cmd --permanent --add-port=8448/tcp || fail "Failed to open port 8448 with firewall-cmd." # Federation port for synapse
+    firewall-cmd --permanent --add-port="${element_port}/tcp" || fail "Failed to open port ${element_port} with firewall-cmd."
+    firewall-cmd --reload || fail "Failed to reload firewall rules."
+  fi
+
+  log "Firewall ports opened successfully."
 }
 
 # Generate docker-compose.yaml file for synapse, using the port, server name and path specified by user
@@ -215,14 +254,14 @@ start_docker_containers() {
 
 # The main function.
 main() {
-  log "Welcome to the setup script for synapse and element-web docker containers!"
-  log "This script will guide you through the setup process and generate necessary configuration files for synapse and element-web. Please follow the instructions and provide the required information when prompted."
-  log "Please note that this script may not stop in a few cases when you provide invalid input. Please exit the script manually and run it again with correct input if you encounter such issue."
-  log "I will try to fix this in the future updates. Thank you for your understanding."
+  hint "Welcome to the setup script for synapse and element-web docker containers!"
+  hint "This script will guide you through the setup process and generate necessary configuration files for synapse and element-web. Please follow the instructions and provide the required information when prompted."
+  hint "Please note that this script may not stop in a few cases when you provide invalid input. Please exit the script manually and run it again with correct input if you encounter such issue."
+  hint "Before we start, please make sure that your basic firewall configuration is properly set up."
   log "Verifying that you are root..."
   check_root_permission
   verify_docker_installation
-  # verify_firewall_installation
+  verify_firewall_installation
 
   # Generate configuration file for synapse
   synapse_destination="$(get_synapse_installation_path)"
@@ -237,9 +276,14 @@ main() {
   element_web_port="$(get_element_web_port)"
   if [[ "${running_port}" == "${element_web_port}" ]]; then
     fail "Port conflict detected: synapse and element-web cannot use the same port (${running_port})."
+  elif [[ "${running_port}" == 8448 ]]; then
+    fail "Port conflict detected: synapse's federation port (8448) cannot be used as its running port. Please choose another port for synapse."
+  elif [[ "${element_web_port}" == 8448 ]]; then
+    fail "Port conflict detected: synapse's federation port (8448) cannot be used as the running port for element-web. Please choose another port for element-web."
   fi
   check_port_availability "${running_port}" "synapse"
   check_port_availability "${element_web_port}" "element-web"
+  open_firewall_ports "${running_port}" "${element_web_port}"
 
   # Generate docker-compose.yaml file for synapse and element-web
   log "Generating docker-compose.yaml file for synapse and element-web..."
