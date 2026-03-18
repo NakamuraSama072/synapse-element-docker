@@ -1,7 +1,5 @@
 #!/bin/bash
 
-# This is only part of setup.sh; it can only generate files so far.
-
 # Colored outputs
 log() {
   echo "[INFO] $1"
@@ -109,12 +107,14 @@ get_server_name() {
 # get the port that synapse will run on
 get_running_port() {
   local port
+  log "The script is now attempting to set up the running port for synapse." >&2
   read -r -p "Please enter the port that synapse will run on (default: 8008): " port
 
-  # TODO: Validate input
   # No input, use default port instead
   if [[ -z "${port}" ]]; then
     port=8008
+  elif ! [[ "${port}" =~ ^[0-9]+$ ]] || (( port < 1 || port > 65535 )); then
+    fail "Invalid port '${port}'. Please enter a number between 1 and 65535."
   fi
 
   echo "${port}"
@@ -135,15 +135,40 @@ enable_registration_without_verification: true' "$1/homeserver.yaml"
 # Get the port that element-web will run on
 get_element_web_port() {
   local port
+
+  log "The script is now attempting to set up the running port for element-web." >&2
   read -r -p "Please enter the port that element-web will run on (default: 8009): " port
 
-  # TODO: Validate input
   # No input, use default port instead
   if [[ -z "${port}" ]]; then
     port=8009
+  elif ! [[ "${port}" =~ ^[0-9]+$ ]] || (( port < 1 || port > 65535 )); then
+    fail "Invalid port '${port}'. Please enter a number between 1 and 65535."
   fi
 
   echo "${port}"
+}
+
+# Ensure a host port is not already in use
+check_port_availability() {
+  local port="$1"
+  local service_name="$2"
+
+  log "Checking if port ${port} is available for ${service_name}..."
+
+  # Using ss
+  if command -v ss &> /dev/null; then
+    if ss -ltnH | awk '{print $4}' | grep -Eq "(:|\])${port}$"; then
+      fail "Port ${port} is already in use on this host. Please choose another port for ${service_name}."
+    fi
+  # No ss, using netstat as fallback
+  elif command -v netstat &> /dev/null; then
+    if netstat -ltn 2>/dev/null | awk '{print $4}' | grep -Eq "(:|\])${port}$"; then
+      fail "Port ${port} is already in use on this host. Please choose another port for ${service_name}."
+    fi
+  else
+    warning "Unable to verify whether port ${port} is in use (missing ss/netstat). Continuing without occupancy check."
+  fi
 }
 
 # Generate docker-compose.yaml file for synapse, using the port, server name and path specified by user
@@ -210,6 +235,11 @@ main() {
   enable_registration "${synapse_destination}"
   # change_running_port "${running_port}" "${synapse_destination}"
   element_web_port="$(get_element_web_port)"
+  if [[ "${running_port}" == "${element_web_port}" ]]; then
+    fail "Port conflict detected: synapse and element-web cannot use the same port (${running_port})."
+  fi
+  check_port_availability "${running_port}" "synapse"
+  check_port_availability "${element_web_port}" "element-web"
 
   # Generate docker-compose.yaml file for synapse and element-web
   log "Generating docker-compose.yaml file for synapse and element-web..."
