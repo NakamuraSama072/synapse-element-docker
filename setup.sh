@@ -177,6 +177,17 @@ services:
 EOF
 }
 
+# Start docker containers using docker compose or docker-compose (fallback)
+start_docker_containers() {
+  if command -v docker-compose &> /dev/null; then
+    docker-compose up -d
+  elif command -v docker &> /dev/null; then
+    docker compose up -d
+  else
+    fail "docker-compose or docker is not installed. Please install it first and run the script again."
+  fi
+}
+
 # The main function.
 main() {
   log "Welcome to the setup script for synapse and element-web docker containers!"
@@ -205,7 +216,7 @@ main() {
   generate_docker_compose "${synapse_destination}" "${running_port}" "${server_name}" "${element_web_port}"
   log "Generation complete. Now attempting to start synapse and element-web using docker-compose..."
   # Start synapse and element-web using docker-compose
-  docker compose up -d
+  start_docker_containers
 }
 
 # Executes from here
