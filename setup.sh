@@ -97,7 +97,7 @@ get_synapse_installation_path() {
 get_server_name() {
   local server_name
   hint "You must specify a name for your server. It should be FQDN (Fully Qualified Domain Name), e.g. synapse.testinst.net" >&2
-  hint "Please note that you cannot change your server name after generating the configuration file. If you want to change it, you will have to regenerate the configuration file." >&2
+  hint "Please note that you cannot change your server name after generating the configuration file. If you want to change it, a regeneration is mandatory." >&2
   read -r -p "Please enter the name of your server: " server_name
 
   # Empty name
@@ -136,29 +136,85 @@ enable_registration: true\
 enable_registration_without_verification: true' "$1/homeserver.yaml"
 }
 
-# Get the port that element-web will run on
-get_element_web_port() {
-  local port
+# Get the database backend for synapse
+get_database_type() {
+  local database_type
 
-  hint "The script is now attempting to set up the running port for element-web." >&2
-  read -r -p "Please enter the port that element-web will run on (default: 8009): " port
+  hint "Select the database backend for synapse: sqlite (default) or postgresql." >&2
+  read -r -p "Please enter the database backend [sqlite/postgresql] (default: sqlite): " database_type
 
-  # No input, use default port instead
-  if [[ -z "${port}" ]]; then
-    port=8009
-  elif ! [[ "${port}" =~ ^[0-9]+$ ]] || (( port < 1 || port > 65535 )); then
-    fail "Invalid port '${port}'. Please enter a number between 1 and 65535."
+  if [[ -z "${database_type}" ]]; then
+    database_type="sqlite"
   fi
 
-  echo "${port}"
+  case "${database_type,,}" in
+    sqlite)
+      echo "sqlite"
+      ;;
+    postgresql|postgres)
+      echo "postgresql"
+      ;;
+    *)
+      fail "Invalid database backend '${database_type}'. Please choose sqlite or postgresql."
+      ;;
+  esac
 }
+
+# Replace Synapse's generated SQLite configuration with PostgreSQL settings.
+configure_postgresql() {
+  local homeserver_config="$1/homeserver.yaml"
+  local temporary_config="${homeserver_config}.tmp"
+
+  [[ -f "${homeserver_config}" ]] || fail "Unable to find ${homeserver_config}."
+
+  awk '
+    BEGIN {
+      replacement = "database:\n  name: psycopg2\n  args:\n    user: synapse\n    password: synapse\n    database: synapse\n    host: db\n    cp_min: 5\n    cp_max: 10"
+    }
+    /^database:/ && !replaced {
+      print replacement
+      in_database = 1
+      replaced = 1
+      next
+    }
+    in_database && /^[^[:space:]#]/ {
+      in_database = 0
+    }
+    !in_database {
+      print
+    }
+    END {
+      if (!replaced) {
+        print replacement
+      }
+    }
+  ' "${homeserver_config}" > "${temporary_config}" || fail "Failed to configure PostgreSQL in homeserver.yaml."
+
+  mv "${temporary_config}" "${homeserver_config}" || fail "Failed to save PostgreSQL configuration."
+}
+
+# Element Web is temporarily disabled because its image currently has an issue.
+# get_element_web_port() {
+#   local port
+#
+#   hint "The script is now attempting to set up the running port for element-web." >&2
+#   read -r -p "Please enter the port that element-web will run on (default: 8009): " port
+#
+#   if [[ -z "${port}" ]]; then
+#     port=8009
+#   elif ! [[ "${port}" =~ ^[0-9]+$ ]] || (( port < 1 || port > 65535 )); then
+#     fail "Invalid port '${port}'. Please enter a number between 1 and 65535."
+#   fi
+#
+#   echo "${port}"
+# }
 
 # Ensure a host port is not already in use
 check_port_availability() {
   local port="$1"
   local service_name="$2"
 
-  note "Checking if port ${port} is available for ${service_name}..."
+  log "Checking if port ${port} is available for ${service_name}..."
 
   # Using ss
   if command -v ss &> /dev/null; then
@@ -175,10 +231,10 @@ check_port_availability() {
   fi
 }
 
-# Open firewall ports for synapse and element-web
+# Open firewall ports for Synapse
 open_firewall_ports() {
   local synapse_port="$1"
-  local element_port="$2"
+  # local element_port="$2"
 
   # firewall not found or unsupported (e.g. iptables), skip firewall configuration
   if [[ "${FIREWALL_MANAGER}" == "none" ]]; then
@@ -187,25 +243,25 @@ open_firewall_ports() {
   fi
 
   log "Opening port ${synapse_port}/tcp and 8448/tcp for synapse..."
-  log "Opening port ${element_port}/tcp for element-web..."
+  # log "Opening port ${element_port}/tcp for element-web..."
 
   # ufw
   if [[ "${FIREWALL_MANAGER}" == "ufw" ]]; then
     ufw allow "${synapse_port}/tcp" || fail "Failed to open port ${synapse_port} with ufw."
     ufw allow 8448/tcp || fail "Failed to open port 8448 with ufw." # Federation port for synapse
-    ufw allow "${element_port}/tcp" || fail "Failed to open port ${element_port} with ufw."
+    # ufw allow "${element_port}/tcp" || fail "Failed to open port ${element_port} with ufw."
   # firewall-cmd
   elif [[ "${FIREWALL_MANAGER}" == "firewall-cmd" ]]; then
     firewall-cmd --permanent --add-port="${synapse_port}/tcp" || fail "Failed to open port ${synapse_port} with firewall-cmd."
     firewall-cmd --permanent --add-port=8448/tcp || fail "Failed to open port 8448 with firewall-cmd." # Federation port for synapse
-    firewall-cmd --permanent --add-port="${element_port}/tcp" || fail "Failed to open port ${element_port} with firewall-cmd."
+    # firewall-cmd --permanent --add-port="${element_port}/tcp" || fail "Failed to open port ${element_port} with firewall-cmd."
     firewall-cmd --reload || fail "Failed to reload firewall rules."
   fi
 
   log "Firewall ports opened successfully."
 }
 
-# Generate docker-compose.yaml file for synapse, using the port, server name and path specified by user
+# Generate docker-compose.yaml for Synapse and the selected database backend.
 generate_docker_compose() {
   cat <<EOF > "$1/docker-compose.yaml"
 # version: "3.3"
@@ -227,12 +283,33 @@ services:
       LETSENCRYPT_HOST: "$3"
       SYNAPSE_SERVER_NAME: "$3"
       SYNAPSE_REPORT_STATS: "no"
-  element-web:
-    ports:
-      - "$4:80"
-    image: vectorim/element-web
-    container_name: "element-web"
+EOF
+
+  if [[ "$4" == "postgresql" ]]; then
+    cat <<EOF >> "$1/docker-compose.yaml"
+    depends_on:
+      - db
+  db:
+    image: "postgres:17"
+    container_name: "synapse-postgresql"
     restart: unless-stopped
+    environment:
+      POSTGRES_USER: "synapse"
+      POSTGRES_PASSWORD: "synapse"
+      POSTGRES_DB: "synapse"
+    volumes:
+      - "$1/postgresql:/var/lib/postgresql/data"
+EOF
+  fi
+
+  cat <<'EOF' >> "$1/docker-compose.yaml"
+  # Element Web is temporarily disabled because its image currently has an issue.
+  # element-web:
+  #   ports:
+  #     - "$5:80"
+  #   image: vectorim/element-web
+  #   container_name: "element-web"
+  #   restart: unless-stopped
 EOF
 }
 
@@ -266,25 +343,25 @@ main() {
 
   # Additional configuration for synapse
   running_port="$(get_running_port)"
+  database_type="$(get_database_type)"
   enable_registration "${synapse_destination}"
+  if [[ "${database_type}" == "postgresql" ]]; then
+    configure_postgresql "${synapse_destination}"
+  fi
   # change_running_port "${running_port}" "${synapse_destination}"
-  element_web_port="$(get_element_web_port)"
-  if [[ "${running_port}" == "${element_web_port}" ]]; then
-    fail "Port conflict detected: synapse and element-web cannot use the same port (${running_port})."
-  elif [[ "${running_port}" == 8448 ]]; then
+  # element_web_port="$(get_element_web_port)"
+  if [[ "${running_port}" == 8448 ]]; then
     fail "Port conflict detected: synapse's federation port (8448) cannot be used as its running port. Please choose another port for synapse."
-  elif [[ "${element_web_port}" == 8448 ]]; then
-    fail "Port conflict detected: synapse's federation port (8448) cannot be used as the running port for element-web. Please choose another port for element-web."
   fi
   check_port_availability "${running_port}" "synapse"
-  check_port_availability "${element_web_port}" "element-web"
-  open_firewall_ports "${running_port}" "${element_web_port}"
+  # check_port_availability "${element_web_port}" "element-web"
+  open_firewall_ports "${running_port}"
 
-  # Generate docker-compose.yaml file for synapse and element-web
-  log "Generating docker-compose.yaml file for synapse and element-web..."
-  generate_docker_compose "${synapse_destination}" "${running_port}" "${server_name}" "${element_web_port}"
-  log "Generation complete. Now attempting to start synapse and element-web using docker-compose..."
-  # Start synapse and element-web using docker-compose
+  # Generate docker-compose.yaml file for Synapse and the selected database backend.
+  log "Generating docker-compose.yaml file for synapse..."
+  generate_docker_compose "${synapse_destination}" "${running_port}" "${server_name}" "${database_type}"
+  log "Generation complete. Now attempting to start synapse using docker-compose..."
+  # Start Synapse using docker-compose.
   start_docker_containers
 }
 

@@ -2,6 +2,13 @@
 # Please refer to: https://blog.laoda.de/archives/docker-compose-install-matrix-element
 # Reminder: You might need a translator for reading this site.
 
+# Important Notice
+# The following docker-compose.yaml file is a sample configuration for running Synapse.
+# You should modify the configuration according to your needs, especially the environment variables and volumes.
+# Otherwise, containers may not start properly or may not work as expected.
+
+# PS: Currently there is an issue with element-web. That section is temporarily disabled.
+
 services:
   synapse:
     image: "matrixdotorg/synapse:latest"
@@ -33,12 +40,13 @@ services:
   #   environment:
   #     - POSTGRES_USER=synapse
   #     - POSTGRES_PASSWORD=synapse
+  #     - POSTGRES_DB=synapse
   #     - POSTGRES_INITDB_ARGS=--encoding='UTF8' --lc-collate='C' --lc-ctype='C'
   #   volumes:
   #     - /opt/synapse/postgresql:/var/lib/postgresql/17/main/
-  element-web:
-    ports:
-      - "8009:80"
-    image: vectorim/element-web
-    container_name: "element-web"
-    restart: unless-stopped
+  # element-web:
+  #   ports:
+  #     - "8009:80"
+  #   image: vectorim/element-web
+  #   container_name: "element-web"
+  #   restart: unless-stopped
